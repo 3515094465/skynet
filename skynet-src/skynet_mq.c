@@ -12,30 +12,32 @@
 #define DEFAULT_QUEUE_SIZE 64
 #define MAX_GLOBAL_MQ 0x10000
 
-// 0 means mq is not in global mq.
-// 1 means mq is in global mq , or the message is dispatching.
+// 0 means mq is not in global mq.									0表示消息队列不在全局消息队列中
+// 1 means mq is in global mq , or the message is dispatching.		1表示消息队列在全局消息队列中或者该消息正在派发
 
 #define MQ_IN_GLOBAL 1
 #define MQ_OVERLOAD 1024
 
 struct message_queue {
-	struct spinlock lock;
-	uint32_t handle;
-	int cap;
-	int head;
-	int tail;
-	int release;
-	int in_global;
-	int overload;
-	int overload_threshold;
-	struct skynet_message *queue;
-	struct message_queue *next;
+	struct spinlock lock;			// 自旋锁，可能存在多个线程，向同一个队列写入的情况，加上自旋锁避免并发带来的发现，
+    								// 后面会讨论互斥锁，自旋锁，读写锁和条件变量的区别
+
+	uint32_t handle;				// 拥有此消息队列的服务的id	（context）
+	int cap;						// 消息大小（实际上列表大小）
+	int head;						// 头部index
+	int tail;						// 尾部index
+	int release;					// 是否能释放消息
+	int in_global;					// 是否在全局消息队列中，0表示不是，1表示是（处理消息要先把队列pop出来，处理完再看有无数据决定要不要insert回去）
+	int overload;					// 是否过载
+	int overload_threshold;			// 过载的门槛（判定界限）
+	struct skynet_message *queue;	// 消息队列
+	struct message_queue *next;		// 下一个次级消息队列的指针
 };
 
 struct global_queue {
-	struct message_queue *head;
-	struct message_queue *tail;
-	struct spinlock lock;
+	struct message_queue *head;		// 消息队列头
+	struct message_queue *tail;		// 消息队列尾
+	struct spinlock lock;			// 自旋锁
 };
 
 static struct global_queue *Q = NULL;
@@ -135,7 +137,7 @@ skynet_mq_overload(struct message_queue *q) {
 }
 
 int
-skynet_mq_pop(struct message_queue *q, struct skynet_message *message) {
+skynet_mq_pop(struct message_queue *q, struct skynet_message *message) { //队列满了就判断过载然后重新申请队列长度
 	int ret = 1;
 	SPIN_LOCK(q)
 

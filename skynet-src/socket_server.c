@@ -73,7 +73,7 @@ struct write_buffer {
 #define SIZEOF_TCPBUFFER (offsetof(struct write_buffer, udp_address[0]))
 #define SIZEOF_UDPBUFFER (sizeof(struct write_buffer))
 
-struct wb_list {
+struct wb_list {//wb = write_buffer 写入的数据
 	struct write_buffer * head;
 	struct write_buffer * tail;
 };
@@ -86,59 +86,76 @@ struct socket_stat {
 };
 
 struct socket {
-	uintptr_t opaque;
-	struct wb_list high;
-	struct wb_list low;
-	int64_t wb_size;
-	struct socket_stat stat;
-	ATOM_ULONG sending;
-	int fd;
-	int id;
-	ATOM_INT type;
-	uint8_t protocol;
-	bool reading;
-	bool writing;
-	bool closing;
-	ATOM_INT udpconnecting;
-	int64_t warn_size;
+	uintptr_t opaque;		// 与本socket关联的服务地址，socket接收到的消息，最后将会传送到这个服务商
+	struct wb_list high;	// 高优先级发送队列
+	struct wb_list low;		// 低优先级发送队列
+	int64_t wb_size;		// 发送字节大小
+	struct socket_stat stat;// 记录socket状态变量
+	ATOM_ULONG sending;		// 是否有worker线程正在通过管道，发送数据包给socket线程的标记
+	int fd;					// 通过socket()函数返回的fd(与客户端关联的socket的fd)
+	int id;					// 在socket_server结构中，slot列表中的索引
+	ATOM_INT type;			// socket的类型，包括SOCKET_TYPE_PLISTEN、SOCKET_TYPE_PACCEPT、
+                            // SOCKET_TYPE_CONNECTING、SOCKET_TYPE_CONNECTED等
+							// 监听,接受,连接中,已连接
+	uint8_t protocol;		// 使用的协议tcp or udp 
+	bool reading;			// 是否在读
+	bool writing;			// 是否在写入
+	bool closing;			// 是否已关闭
+	ATOM_INT udpconnecting; // udp相关成员，目前不讨论udp相关的内容
+	int64_t warn_size;		// 发送字节超过warn_size的时候，抛出警告日志
 	union {
 		int size;
 		uint8_t udp_address[UDP_ADDRESS_SIZE];
 	} p;
-	struct spinlock dw_lock;
-	int dw_offset;
-	const void * dw_buffer;
-	size_t dw_size;
+	struct spinlock dw_lock;// 自旋锁
+	 						// 从1.2开始，是skynet就添加了多线程处理机制，如果发送队列high
+                            // 和low list都为空的情况下，且sending标记未被设置，则直接通过
+                            // worker线程直接发送，这个dw_lock的作用，就是为了避免worker线程
+                            // 和socket线程，同时对同一个socket实例的send buffer进行write操作
+                            // 导致严重的bug
+	int dw_offset;			// 在worker线程中，如果不能将buffer一次写完，skynet会将这块buffer
+                            // 的地址放在dw_buffer中，而dw_offset标记的是，已经写了多少字节
+                            // dw_size就是这块buffer的总大小
+	const void * dw_buffer; // write_buffer的指针(用来干嘛的?)
+	size_t dw_size;			// write_buffer的大小
 };
 
 struct socket_server {
-	volatile uint64_t time;
-	int recvctrl_fd;
-	int sendctrl_fd;
-	int checkctrl;
-	poll_fd event_fd;
-	ATOM_INT alloc_id;
-	int event_n;
-	int event_index;
-	struct socket_object_interface soi;
-	struct event ev[MAX_EVENT];
-	struct socket slot[MAX_SOCKET];
-	char buffer[MAX_INFO];
-	uint8_t udpbuffer[MAX_UDP_PACKAGE];
-	fd_set rfds;
+	volatile uint64_t time;					// 当前时间值，每隔2.5毫秒更新一次
+	int recvctrl_fd;						// pipe接收的一端，一般在socket线程内使用
+	int sendctrl_fd;						// pipe发送的一端，一般在worker线程内使用
+	int checkctrl;							// 是否处理worker线程发送的消息的标记，1表示需要，0表示不需要
+	poll_fd event_fd;						// 如果使用epoll，那么它就是epoll实例的fd（本文只讨论epoll的情况）
+	ATOM_INT alloc_id;						// 用于生成skynet socket实例id的变量，每次生成一个socket实例，就
+											// 自增1（溢出前会回绕），socket实例 id是根据当前分配的alloc_id 
+											// hash计算得出
+	int event_n;							// 每次有IO准备就绪时，IO事件的总数
+	int event_index;						// 当前处理到哪个epoll事件的索引
+	struct socket_object_interface soi;		// 当发送自定义结构的userobject时，需要应用层注册，自己要使用的
+                                        	// 内存分配函数和释放函数
+	struct event ev[MAX_EVENT];				// 当epoll实例中的interest list中，有fd的IO准备就绪时，响应的事件
+                                        	// 信息，就会被填写到这个结构中
+											// 在sp_wait中写入
+	struct socket slot[MAX_SOCKET];			// 在skynet中，每个系统socket被创建出来的时候，都会有一个skynet的
+                                        	// socket实例与之对应，skynet最多可以支持65536(2^16)个socket
+											// 指代码上方的socket结构体,slot:名单
+	char buffer[MAX_INFO];					// 用于临时存放，状态信息的buffer
+	uint8_t udpbuffer[MAX_UDP_PACKAGE];		// UDP相关，目前不讨论UDP相关的内容
+	fd_set rfds;							// 传给select函数的参数，主要用于检查，worker线程是否有消息发送给
+                                        	// socket线程 
 };
 
 struct request_open {
-	int id;
-	int port;
-	uintptr_t opaque;
-	char host[1];
+	int id;					// socket在socket_server里slot的id
+	int port;				// 端口?
+	uintptr_t opaque;		// id在slot里指向的socket关联的服务地址，socket接收到的消息，最后将会传送到这个服务商
+	char host[1];			// 未知
 };
 
 struct request_send {
-	int id;
-	size_t sz;
-	const void * buffer;
+	int id;					// socket在socket_server里slot的id
+	size_t sz;				// 要发送的buffer的实际大小
+	const void * buffer;	// 要发送buffer的指针
 };
 
 struct request_send_udp {
@@ -152,16 +169,16 @@ struct request_setudp {
 };
 
 struct request_close {
-	int id;
-	int shutdown;
-	uintptr_t opaque;
+	int id;					// socket在socket_server里slot的id
+	int shutdown;			// 未知
+	uintptr_t opaque;		// id在slot里指向的socket关联的服务地址，socket接收到的消息，最后将会传送到这个服务商
 };
 
 struct request_listen {
-	int id;
-	int fd;
-	uintptr_t opaque;
-	char host[1];
+	int id;					// socket在socket_server里slot的id
+	int fd;					// 未知
+	uintptr_t opaque;		// id在slot里指向的socket关联的服务地址，socket接收到的消息，最后将会传送到这个服务商
+	char host[1];			// 未知
 };
 
 struct request_bind {
@@ -378,18 +395,18 @@ clear_wb_list(struct wb_list *list) {
 struct socket_server * 
 socket_server_create(uint64_t time) {
 	int i;
-	int fd[2];
+	int fd[2]; //管道的（fd【0】读数据， fd【1】写数据）
 	poll_fd efd = sp_create();
-	if (sp_invalid(efd)) {
+	if (sp_invalid(efd)) { //epoll的id（只考虑epoll版本）
 		skynet_error(NULL, "socket-server: create event pool failed.");
 		return NULL;
 	}
-	if (pipe(fd)) {
+	if (pipe(fd)) { //创建管道（原函数，未包装）
 		sp_release(efd);
 		skynet_error(NULL, "socket-server: create socket pair failed.");
 		return NULL;
 	}
-	if (sp_add(efd, fd[0], NULL)) {
+	if (sp_add(efd, fd[0], NULL)) { //fd0加入epoll
 		// add recvctrl_fd to event poll
 		skynet_error(NULL, "socket-server: can't add server fd to event pool.");
 		close(fd[0]);
@@ -398,14 +415,14 @@ socket_server_create(uint64_t time) {
 		return NULL;
 	}
 
-	struct socket_server *ss = MALLOC(sizeof(*ss));
+	struct socket_server *ss = MALLOC(sizeof(*ss)); // 分配内存
 	ss->time = time;
-	ss->event_fd = efd;
-	ss->recvctrl_fd = fd[0];
-	ss->sendctrl_fd = fd[1];
-	ss->checkctrl = 1;
+	ss->event_fd = efd;			// 线程池
+	ss->recvctrl_fd = fd[0];	// 管道读取数据fd
+	ss->sendctrl_fd = fd[1];	// 管道写入数据fd
+	ss->checkctrl = 1;			// 初始化为需要处理消息（作为初始的驱动）
 
-	for (i=0;i<MAX_SOCKET;i++) {
+	for (i=0;i<MAX_SOCKET;i++) { // skynet的socket初始化(预创建的MAX_SOCKET个socket)
 		struct socket *s = &ss->slot[i];
 		ATOM_INIT(&s->type, SOCKET_TYPE_INVALID);
 		clear_wb_list(&s->high);
@@ -1242,19 +1259,20 @@ block_readpipe(int pipefd, void *buffer, int sz) {
 			return;
 		}
 		// must atomic read from a pipe
-		assert(n == sz);
+		assert(n == sz); //读的不等于想读的，说明数据长度有问题
 		return;
 	}
 }
-
+//这个函数主要用于判断，当前worker线程是否有发送请求过来，这个函数内部调用了select来做IO事件监测，并且它是非阻塞的，如果没有它将立即返回false
 static int
 has_cmd(struct socket_server *ss) {
 	struct timeval tv = {0,0};
 	int retval;
 
 	FD_SET(ss->recvctrl_fd, &ss->rfds);
-
+	// 参数1：必比最大的fd大1
 	retval = select(ss->recvctrl_fd+1, &ss->rfds, NULL, NULL, &tv);
+	//单个操作，返回值最多就只有1
 	if (retval == 1) {
 		return 1;
 	}
@@ -1333,17 +1351,19 @@ dec_sending_ref(struct socket_server *ss, int id) {
 	}
 }
 
-// return type
+// 当在has_cmd函数中，判断得到worker线程有发送请求给socket线程的时候，ctrl_cmd函数就会对其进行处理
 static int
 ctrl_cmd(struct socket_server *ss, struct socket_message *result) {
 	int fd = ss->recvctrl_fd;
 	// the length of message is one byte, so 256+8 buffer size is enough.
 	uint8_t buffer[256];
 	uint8_t header[2];
+	// 先读头部，指定了类型与后续包的长度
 	block_readpipe(fd, header, sizeof(header));
 	int type = header[0];
 	int len = header[1];
-	block_readpipe(fd, buffer, len);
+	// 后续包的长度
+	block_readpipe(fd, buffer, len); 
 	// ctrl command only exist in local fd, so don't worry about endian.
 	switch (type) {
 	case 'R':
@@ -1630,11 +1650,11 @@ clear_closed_event(struct socket_server *ss, struct socket_message * result, int
 }
 
 // return type
-int 
+int //读取网络消息 两种处理方式 一个处理 ss->recvctrl_fd来自管道的信息,一个是来自socket的信息
 socket_server_poll(struct socket_server *ss, struct socket_message * result, int * more) {
 	for (;;) {
 		if (ss->checkctrl) {
-			if (has_cmd(ss)) {
+			if (has_cmd(ss)) { //有相关event交给ctrl_cmd处理
 				int type = ctrl_cmd(ss, result);
 				if (type != -1) {
 					clear_closed_event(ss, result, type);
@@ -1667,6 +1687,7 @@ socket_server_poll(struct socket_server *ss, struct socket_message * result, int
 			// dispatch pipe message at beginning
 			continue;
 		}
+		//接下来都是处理非pipe相关的事件
 		struct socket_lock l;
 		socket_lock_init(s, &l);
 		switch (ATOM_LOAD(&s->type)) {

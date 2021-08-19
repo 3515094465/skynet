@@ -5,7 +5,8 @@ CSERVICE_PATH ?= cservice
 
 SKYNET_BUILD_PATH ?= .
 
-CFLAGS = -g -O2 -Wall -I$(LUA_INC) $(MYCFLAGS)
+# CFLAGS = -g -O2 -Wall -I$(LUA_INC) $(MYCFLAGS) //本行表示优化代码，-g -02优化代码，编译后变量在调试的时候看不到 
+CFLAGS = -g -O0 -Wall -I$(LUA_INC) $(MYCFLAGS) # 不优化代码，能看到变量
 # CFLAGS += -DUSE_PTHREAD_LOCK
 
 # lua

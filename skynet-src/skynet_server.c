@@ -41,21 +41,22 @@
 #endif
 
 struct skynet_context {
-	void * instance;
-	struct skynet_module * mod;
-	void * cb_ud;
-	skynet_cb cb;
-	struct message_queue *queue;
+	void * instance;				// 由指定module的create函数，创建的数据实例指针，同一类服务可能有多个实例，
+									// 因此每个服务都应该有自己的数据
+	struct skynet_module * mod;     // 引用服务module的指针，方便后面对create、init、signal和release函数进行调用  (注意：c没有对象这一说，直接用就是了)
+	void * cb_ud;					// 调用callback函数时，回传给callback的userdata，一般是instance指针
+	skynet_cb cb;					// 服务的消息回调函数，一般在skynet_module的init函数里指定（eg：service_logger.c 的回调函数为logger_cb）
+	struct message_queue *queue;	// 服务专属的次级消息队列指针
 	ATOM_POINTER logfile;
 	uint64_t cpu_cost;	// in microsec
 	uint64_t cpu_start;	// in microsec
-	char result[32];
-	uint32_t handle;
-	int session_id;
-	ATOM_INT ref;
-	int message_count;
-	bool init;
-	bool endless;
+	char result[32];				// 操作skynet_context的返回值，会写到这里
+	uint32_t handle;				// 标识唯一context的服务id 句柄
+	int session_id;					// 在发出请求后，收到对方的返回消息时，通过session_id来匹配一个返回，对应哪个请求
+	ATOM_INT ref;					// 引用计数变量，当为0时，表示内存可以被释放
+	int message_count;				// 消息数量
+	bool init;						// 是否完成初始化
+	bool endless;					// 消息是否堵住
 	bool profile;
 
 	CHECKCALLING_DECL
@@ -124,17 +125,18 @@ drop_message(struct skynet_message *msg, void *ud) {
 
 struct skynet_context * 
 skynet_context_new(const char * name, const char *param) {
-	struct skynet_module * mod = skynet_module_query(name);
+	struct skynet_module * mod = skynet_module_query(name); // 查找某个模块
 
 	if (mod == NULL)
 		return NULL;
 
-	void *inst = skynet_module_instance_create(mod);
+	void *inst = skynet_module_instance_create(mod); // 创建出模块实例
 	if (inst == NULL)
 		return NULL;
-	struct skynet_context * ctx = skynet_malloc(sizeof(*ctx));
+	struct skynet_context * ctx = skynet_malloc(sizeof(*ctx));// 申请一块context大小的空间
 	CHECKCALLING_INIT(ctx)
 
+	//对context填充
 	ctx->mod = mod;
 	ctx->instance = inst;
 	ATOM_INIT(&ctx->ref , 2);
@@ -152,16 +154,16 @@ skynet_context_new(const char * name, const char *param) {
 	ctx->profile = G_NODE.profile;
 	// Should set to 0 first to avoid skynet_handle_retireall get an uninitialized handle
 	ctx->handle = 0;	
-	ctx->handle = skynet_handle_register(ctx);
+	ctx->handle = skynet_handle_register(ctx);// 注册到skynet_context中
 	struct message_queue * queue = ctx->queue = skynet_mq_create(ctx->handle);
 	// init function maybe use ctx->handle, so it must init at last
 	context_inc();
 
 	CHECKCALLING_BEGIN(ctx)
-	int r = skynet_module_instance_init(mod, inst, ctx, param);
+	int r = skynet_module_instance_init(mod, inst, ctx, param); // 调用实例的初始化方法
 	CHECKCALLING_END(ctx)
-	if (r == 0) {
-		struct skynet_context * ret = skynet_context_release(ctx);
+	if (r == 0) { // 0表示成功
+		struct skynet_context * ret = skynet_context_release(ctx); //尝试释放（引用计数为1就释放，创建默认为2）
 		if (ret) {
 			ctx->init = true;
 		}
@@ -170,12 +172,12 @@ skynet_context_new(const char * name, const char *param) {
 			skynet_error(ret, "LAUNCH %s %s", name, param ? param : "");
 		}
 		return ret;
-	} else {
-		skynet_error(ctx, "FAILED launch %s", name);
-		uint32_t handle = ctx->handle;
-		skynet_context_release(ctx);
-		skynet_handle_retire(handle);
-		struct drop_t d = { handle };
+	} else { // 失败走这里
+		skynet_error(ctx, "FAILED launch %s", name); // 报错
+		uint32_t handle = ctx->handle; //取到句柄
+		skynet_context_release(ctx); // 释放context
+		skynet_handle_retire(handle); // 根据句柄在storage注销context
+		struct drop_t d = { handle };  //？？为何还要再包一层再传参（值传递就可以了把）
 		skynet_mq_release(queue, drop_message, &d);
 		return NULL;
 	}
@@ -219,7 +221,7 @@ delete_context(struct skynet_context *ctx) {
 }
 
 struct skynet_context * 
-skynet_context_release(struct skynet_context *ctx) {
+skynet_context_release(struct skynet_context *ctx) { //根据引用计数判断是否该释放（创建的时候默认了非1的引用计数）
 	if (ATOM_FDEC(&ctx->ref) == 1) {
 		delete_context(ctx);
 		return NULL;
@@ -305,10 +307,10 @@ skynet_context_message_dispatch(struct skynet_monitor *sm, struct message_queue 
 
 	uint32_t handle = skynet_mq_handle(q);
 
-	struct skynet_context * ctx = skynet_handle_grab(handle);
-	if (ctx == NULL) {
+	struct skynet_context * ctx = skynet_handle_grab(handle); // 根据句柄获取某个context
+	if (ctx == NULL) { //如果获取不到，释放消息队列把
 		struct drop_t d = { handle };
-		skynet_mq_release(q, drop_message, &d);
+		skynet_mq_release(q, drop_message, &d); 
 		return skynet_globalmq_pop();
 	}
 
@@ -316,27 +318,27 @@ skynet_context_message_dispatch(struct skynet_monitor *sm, struct message_queue 
 	struct skynet_message msg;
 
 	for (i=0;i<n;i++) {
-		if (skynet_mq_pop(q,&msg)) {
-			skynet_context_release(ctx);
-			return skynet_globalmq_pop();
+		if (skynet_mq_pop(q,&msg)) { // 如果取不出消息
+			skynet_context_release(ctx); //释放context
+			return skynet_globalmq_pop(); 
 		} else if (i==0 && weight >= 0) {
 			n = skynet_mq_length(q);
 			n >>= weight;
 		}
-		int overload = skynet_mq_overload(q);
+		int overload = skynet_mq_overload(q); //检测一下是否过载
 		if (overload) {
 			skynet_error(ctx, "May overload, message queue length = %d", overload);
 		}
 
-		skynet_monitor_trigger(sm, msg.source , handle);
+		skynet_monitor_trigger(sm, msg.source , handle); //触发监视器（为何要触发一下？ 还没看到）
 
-		if (ctx->cb == NULL) {
-			skynet_free(msg.data);
+		if (ctx->cb == NULL) {// 没有回调函数
+			skynet_free(msg.data); // 释放掉消息
 		} else {
-			dispatch_message(ctx, &msg);
+			dispatch_message(ctx, &msg); // 派发消息
 		}
 
-		skynet_monitor_trigger(sm, 0,0);
+		skynet_monitor_trigger(sm, 0,0);// 触发监视器（监视器主要作用是干嘛的）
 	}
 
 	assert(q == ctx->queue);
@@ -347,7 +349,7 @@ skynet_context_message_dispatch(struct skynet_monitor *sm, struct message_queue 
 		skynet_globalmq_push(q);
 		q = nq;
 	} 
-	skynet_context_release(ctx);
+	skynet_context_release(ctx); // 继续尝试释放context
 
 	return q;
 }

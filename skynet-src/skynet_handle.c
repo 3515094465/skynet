@@ -11,28 +11,30 @@
 #define DEFAULT_SLOT_SIZE 4
 #define MAX_SLOT_SIZE 0x40000000
 
+// 这个结构用于记录，服务对应的别名，当应用层为某个服务命名时，会写到这里来
+
 struct handle_name {
-	char * name;
-	uint32_t handle;
+	char * name;		// 服务别名
+	uint32_t handle;	// 服务id
 };
 
 struct handle_storage {
-	struct rwlock lock;
+	struct rwlock lock;					// 读写锁
 
-	uint32_t harbor;
-	uint32_t handle_index;
-	int slot_size;
-	struct skynet_context ** slot;
+	uint32_t harbor;					// 集群 id
+	uint32_t handle_index;				// 当前句柄索引
+	int slot_size;						// 槽位数组大小
+	struct skynet_context ** slot;		// skynet_context 数组 list  （实例列表）
 	
-	int name_cap;
-	int name_count;
-	struct handle_name *name;
+	int name_cap;						// 别名列表大小，大小为2^n
+	int name_count;						// 别名数量
+	struct handle_name *name;			// 别名列表
 };
 
 static struct handle_storage *H = NULL;
 
 uint32_t
-skynet_handle_register(struct skynet_context *ctx) {
+skynet_handle_register(struct skynet_context *ctx) { //在context创建后会调用注册到storage中
 	struct handle_storage *s = H;
 
 	rwlock_wlock(&s->lock);
@@ -71,7 +73,7 @@ skynet_handle_register(struct skynet_context *ctx) {
 }
 
 int
-skynet_handle_retire(uint32_t handle) {
+skynet_handle_retire(uint32_t handle) { // 传入句柄，注销服务（context）
 	int ret = 0;
 	struct handle_storage *s = H;
 
@@ -110,7 +112,7 @@ skynet_handle_retire(uint32_t handle) {
 }
 
 void 
-skynet_handle_retireall() {
+skynet_handle_retireall() { //注销所有服务
 	struct handle_storage *s = H;
 	for (;;) {
 		int n=0;

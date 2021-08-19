@@ -67,6 +67,7 @@ forward_message(int type, bool padding, struct socket_message * result) {
 	message.data = sm;
 	message.sz = sz | ((size_t)PTYPE_SOCKET << MESSAGE_TYPE_SHIFT);
 	
+	// return -1 立即释放内存
 	if (skynet_context_push((uint32_t)result->opaque, &message)) {
 		// todo: report somewhere to close socket
 		// don't call skynet_socket_close here (It will block mainloop)

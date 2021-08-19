@@ -24,12 +24,12 @@
 #define MEMORY_WARNING_REPORT (1024 * 1024 * 32)
 
 struct snlua {
-	lua_State * L;
-	struct skynet_context * ctx;
-	size_t mem;
-	size_t mem_report;
-	size_t mem_limit;
-	lua_State * activeL;
+	lua_State * L;	//  lua状态机   服务的脚本上下文
+	struct skynet_context * ctx; // 关联的skynet服务，具体的服务指针
+	size_t mem;				//使用的内存
+	size_t mem_report;		//内存预警（达到阈值后会打一条日志，然后阈值翻倍）
+	size_t mem_limit;		//内存限制
+	lua_State * activeL;	//用来干嘛的？？？？
 	ATOM_INT trap;
 };
 
@@ -471,7 +471,7 @@ snlua_init(struct snlua *l, struct skynet_context *ctx, const char * args) {
 	char * tmp = skynet_malloc(sz);
 	memcpy(tmp, args, sz);
 	skynet_callback(ctx, l , launch_cb);
-	const char * self = skynet_command(ctx, "REG", NULL);
+	const char * self = skynet_command(ctx, "REG", NULL); // 获取本服务的句柄
 	uint32_t handle_id = strtoul(self+1, NULL, 16);
 	// it must be first message
 	skynet_send(ctx, 0, handle_id, PTYPE_TAG_DONTCOPY,0, tmp, sz);

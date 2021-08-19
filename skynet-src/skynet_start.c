@@ -21,10 +21,10 @@
 struct monitor {
 	int count;
 	struct skynet_monitor ** m;
-	pthread_cond_t cond;
+	pthread_cond_t cond; //	condition ？
 	pthread_mutex_t mutex;
 	int sleep;
-	int quit;
+	int quit; // 节点是否要退出
 };
 
 struct worker_parm {
@@ -53,7 +53,7 @@ create_thread(pthread_t *thread, void *(*start_routine) (void *), void *arg) {
 }
 
 static void
-wakeup(struct monitor *m, int busy) {
+wakeup(struct monitor *m, int busy) { //唤醒某些线程（？）
 	if (m->sleep >= m->count - busy) {
 		// signal sleep worker, "spurious wakeup" is harmless
 		pthread_cond_signal(&m->cond);
@@ -112,7 +112,8 @@ thread_monitor(void *p) {
 
 static void
 signal_hup() {
-	// make log file reopen
+	// make log file reopen 
+	// 重新打开日志文件
 
 	struct skynet_message smsg;
 	smsg.source = 0;
@@ -126,15 +127,15 @@ signal_hup() {
 }
 
 static void *
-thread_timer(void *p) {
+thread_timer(void *p) { //线程调用的定时器方法
 	struct monitor * m = p;
-	skynet_initthread(THREAD_TIMER);
+	skynet_initthread(THREAD_TIMER); //设置线程共享变量,标记为定时器线程
 	for (;;) {
-		skynet_updatetime();
-		skynet_socket_updatetime();
-		CHECK_ABORT
-		wakeup(m,m->count-1);
-		usleep(2500);
+		skynet_updatetime(); // 更新当前时间
+		skynet_socket_updatetime(); // 网络层更新当前时间
+		CHECK_ABORT // 宏定义（如果没有运行中的模块，就退出循环）
+		wakeup(m,m->count-1); // 让监视器唤醒某些线程？？
+		usleep(2500); //睡眠2.5毫秒
 		if (SIG) {
 			signal_hup();
 			SIG = 0;
@@ -151,7 +152,7 @@ thread_timer(void *p) {
 }
 
 static void *
-thread_worker(void *p) {
+thread_worker(void *p) { // 工作线程调用的方法
 	struct worker_parm *wp = p;
 	int id = wp->id;
 	int weight = wp->weight;
@@ -159,10 +160,10 @@ thread_worker(void *p) {
 	struct skynet_monitor *sm = m->m[id];
 	skynet_initthread(THREAD_WORKER);
 	struct message_queue * q = NULL;
-	while (!m->quit) {
-		q = skynet_context_message_dispatch(sm, q, weight);
-		if (q == NULL) {
-			if (pthread_mutex_lock(&m->mutex) == 0) {
+	while (!m->quit) { //
+		q = skynet_context_message_dispatch(sm, q, weight); // 派发消息，并返回消息队列
+		if (q == NULL) { // 如果队列是空的
+			if (pthread_mutex_lock(&m->mutex) == 0) {// 未锁定 进入操作
 				++ m->sleep;
 				// "spurious wakeup" is harmless,
 				// because skynet_context_message_dispatch() can be call at any time.
@@ -201,7 +202,7 @@ start(int thread) {
 		fprintf(stderr, "Init cond error");
 		exit(1);
 	}
-
+	//固定三个线程（监视线程，定时器线程，网络线程）
 	create_thread(&pid[0], thread_monitor, m);
 	create_thread(&pid[1], thread_timer, m);
 	create_thread(&pid[2], thread_socket, m);
@@ -212,7 +213,7 @@ start(int thread) {
 		2, 2, 2, 2, 2, 2, 2, 2, 
 		3, 3, 3, 3, 3, 3, 3, 3, };
 	struct worker_parm wp[thread];
-	for (i=0;i<thread;i++) {
+	for (i=0;i<thread;i++) {// 配置指定的n个工作线程
 		wp[i].m = m;
 		wp[i].id = i;
 		if (i < sizeof(weight)/sizeof(weight[0])) {

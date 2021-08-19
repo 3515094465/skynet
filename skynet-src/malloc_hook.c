@@ -297,7 +297,7 @@ dump_c_mem() {
 }
 
 char *
-skynet_strdup(const char *str) {
+skynet_strdup(const char *str) {// str的副本
 	size_t sz = strlen(str);
 	char * ret = skynet_malloc(sz+1);
 	memcpy(ret, str, sz+1);

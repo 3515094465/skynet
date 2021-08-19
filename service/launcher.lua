@@ -92,8 +92,10 @@ end
 
 local function launch_service(service, ...)
 	local param = table.concat({...}, " ")
+	-- 创建一个服务，返回该服务的句柄
 	local inst = skynet.launch(service, param)
 	local session = skynet.context()
+	-- 取一个response闭包，存起来，等skynet.start返回再调用
 	local response = skynet.response()
 	if inst then
 		services[inst] = service .. " " .. param
